@@ -31,16 +31,6 @@ function App() {
   const [secondsLeft, setSecondsLeft] = useState(60 * 60);
   const [result, setResult] = useState(null);
 
-  // Ngân hàng câu sai
-  const [wrongQuestionsBank, setWrongQuestionsBank] = useState([]);
-  const [selectedWrongSubject, setSelectedWrongSubject] = useState("ALL");
-  const [isWrongPracticeMode, setIsWrongPracticeMode] = useState(false);
-
-  const [reviewFilter, setReviewFilter] = useState("all");
-  const [isDragging, setIsDragging] = useState(false);
-  const [confirmModal, setConfirmModal] = useState(null);
-  const [toast, setToast] = useState(null);
-
   // QUẢN LÝ QUYỀN ADMIN VÀ THÔNG TIN HỌC VIÊN
   const [isAdmin, setIsAdmin] = useState(
     () => localStorage.getItem("MANULIFE_ADMIN") === "true",
@@ -49,6 +39,16 @@ function App() {
     const saved = localStorage.getItem("MANULIFE_STUDENT");
     return saved ? JSON.parse(saved) : null;
   });
+
+  // Ngân hàng câu sai (Phân tách theo mã đại lý)
+  const [wrongQuestionsBank, setWrongQuestionsBank] = useState([]);
+  const [selectedWrongSubject, setSelectedWrongSubject] = useState("ALL");
+  const [isWrongPracticeMode, setIsWrongPracticeMode] = useState(false);
+
+  const [reviewFilter, setReviewFilter] = useState("all");
+  const [isDragging, setIsDragging] = useState(false);
+  const [confirmModal, setConfirmModal] = useState(null);
+  const [toast, setToast] = useState(null);
 
   // Modal Học viên (Mã số đại lý) & Admin Modal
   const [showStudentModal, setShowStudentModal] = useState(false);
@@ -89,15 +89,26 @@ function App() {
   const [showQuestionGridModal, setShowQuestionGridModal] = useState(false);
   const answeredCount = Object.keys(answers).length;
 
+  // Helper lấy key LocalStorage riêng theo Mã Đại Lý
+  function getWrongBankStorageKey(agentCode) {
+    if (!agentCode) return null;
+    return `WRONG_QUESTIONS_BANK_${String(agentCode).trim().toUpperCase()}`;
+  }
+
+  // Nạp câu sai tương ứng với Đại lý hiện tại
   useEffect(() => {
     loadWrongBank();
-  }, [screen]);
+  }, [screen, currentStudent]);
 
   function loadWrongBank() {
+    if (!currentStudent || !currentStudent.agentCode) {
+      setWrongQuestionsBank([]);
+      return;
+    }
+
     try {
-      const data = JSON.parse(
-        localStorage.getItem("WRONG_QUESTIONS_BANK") || "[]",
-      );
+      const key = getWrongBankStorageKey(currentStudent.agentCode);
+      const data = JSON.parse(localStorage.getItem(key) || "[]");
       setWrongQuestionsBank(data);
     } catch (err) {
       setWrongQuestionsBank([]);
@@ -134,16 +145,20 @@ function App() {
   }
 
   function clearWrongQuestionsBank() {
+    if (!currentStudent || !currentStudent.agentCode) return;
+
     setConfirmModal({
       title: "Xóa toàn bộ câu hỏi sai?",
-      message:
-        "Bạn có chắc muốn xóa lịch sử các câu làm sai trên thiết bị này không?",
+      message: `Bạn có chắc muốn xóa lịch sử các câu làm sai của Đại lý ${currentStudent.agentCode} trên thiết bị này không?`,
       confirmText: "Xóa sạch",
       danger: true,
       onConfirm: () => {
-        localStorage.removeItem("WRONG_QUESTIONS_BANK");
+        const key = getWrongBankStorageKey(currentStudent.agentCode);
+        if (key) localStorage.removeItem(key);
         setWrongQuestionsBank([]);
-        notify("Đã xóa sạch ngân hàng câu sai!");
+        notify(
+          `Đã xóa sạch ngân hàng câu sai của đại lý ${currentStudent.agentCode}!`,
+        );
       },
     });
   }
@@ -756,11 +771,13 @@ function App() {
     setStatsPage(1);
   }, [searchAgentFilter, adminResults, statsPeriod]);
 
+  // LƯU CÂU SAI VÀO LOCAL STORAGE THEO MÃ ĐẠI LÝ
   function saveWrongQuestions(examQuestions, userAnswers, examObj, subInfo) {
+    if (!currentStudent || !currentStudent.agentCode) return;
+
     try {
-      const existing = JSON.parse(
-        localStorage.getItem("WRONG_QUESTIONS_BANK") || "[]",
-      );
+      const storageKey = getWrongBankStorageKey(currentStudent.agentCode);
+      const existing = JSON.parse(localStorage.getItem(storageKey) || "[]");
       const wrongList = [];
 
       examQuestions.forEach((q, idx) => {
@@ -787,9 +804,10 @@ function App() {
           index === self.findIndex((t) => t.questionText === item.questionText),
       );
 
-      localStorage.setItem("WRONG_QUESTIONS_BANK", JSON.stringify(uniqueBank));
+      localStorage.setItem(storageKey, JSON.stringify(uniqueBank));
+      setWrongQuestionsBank(uniqueBank);
     } catch (err) {
-      console.error("Lỗi lưu câu sai:", err);
+      console.error("Lỗi lưu câu sai theo đại lý:", err);
     }
   }
 
@@ -908,8 +926,8 @@ function App() {
               </div>
             </section>
 
-            {/* THẺ NGÂN HÀNG CÂU HỎI SAI */}
-            {wrongQuestionsBank.length > 0 && (
+            {/* THẺ NGÂN HÀNG CÂU HỎI SAI (HIỂN THỊ KHI ĐÃ NHẬP MÃ ĐẠI LÝ) */}
+            {currentStudent && wrongQuestionsBank.length > 0 && (
               <div
                 style={{
                   background: "#fff3e0",
@@ -930,14 +948,15 @@ function App() {
                 >
                   <div>
                     <span className="eyebrow" style={{ color: "#e65100" }}>
-                      KHO TỰ ÔN TẬP TẠI MÁY
+                      KHO TỰ ÔN TẬP CỦA ĐẠI LÝ {currentStudent.agentCode}
                     </span>
                     <h2 style={{ margin: "4px 0 2px", color: "#e65100" }}>
                       🔥 Ngân Hàng Câu Sai ({wrongQuestionsBank.length} câu)
                     </h2>
                     <p style={{ margin: 0, fontSize: "13px", color: "#666" }}>
-                      Tổng hợp các câu bạn từng làm sai trên trình duyệt này.
-                      Luyện lại để khắc sâu kiến thức!
+                      Tổng hợp các câu đại lý <b>{currentStudent.name}</b> từng
+                      làm sai trên trình duyệt này. Luyện lại để khắc sâu kiến
+                      thức!
                     </p>
                   </div>
 
@@ -1260,6 +1279,7 @@ function App() {
                 </article>
               </section>
             )}
+
             {/* Bộ lọc chỉ áp dụng cho bảng kết quả bên dưới */}
             <div style={{ marginBottom: "20px", display: "flex", gap: "10px" }}>
               <input
@@ -2002,12 +2022,12 @@ function App() {
             <div className="page-heading">
               <div>
                 <span className="eyebrow" style={{ color: "#e65100" }}>
-                  HỆ THỐNG GHI NHỚ CÂU SAI
+                  HỆ THỐNG GHI NHỚ CÂU SAI - ĐẠI LÝ: {currentStudent?.agentCode}
                 </span>
                 <h1>Danh Sách Câu Làm Sai ({wrongQuestionsBank.length} câu)</h1>
                 <p>
-                  Danh sách các câu hỏi bạn từng chọn chưa đúng để tiện xem lại
-                  hoặc hỏi giảng viên.
+                  Danh sách các câu hỏi đại lý <b>{currentStudent?.name}</b>{" "}
+                  từng chọn chưa đúng để tiện xem lại hoặc hỏi giảng viên.
                 </p>
               </div>
               <div style={{ display: "flex", gap: "8px" }}>
