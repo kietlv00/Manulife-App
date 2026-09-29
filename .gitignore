@@ -1,11 +1,6 @@
-# Bỏ qua file chứa thông tin nhạy cảm
 .env
 .env.local
 .env.*.local
-
-# Bỏ qua thư mục node_modules
 node_modules/
-
-# Bỏ qua thư mục build khi đóng gói
 dist/
 build/
