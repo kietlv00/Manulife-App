@@ -41,20 +41,34 @@ function App() {
   const [confirmModal, setConfirmModal] = useState(null);
   const [toast, setToast] = useState(null);
 
+  // QUẢN LÝ QUYỀN ADMIN VÀ THÔNG TIN HỌC VIÊN
   const [isAdmin, setIsAdmin] = useState(
     () => localStorage.getItem("MANULIFE_ADMIN") === "true",
   );
-  const [currentUser, setCurrentUser] = useState(() => {
-    const saved = localStorage.getItem("MANULIFE_USER");
+  const [currentStudent, setCurrentStudent] = useState(() => {
+    const saved = localStorage.getItem("MANULIFE_STUDENT");
     return saved ? JSON.parse(saved) : null;
   });
 
-  const [showLoginModal, setShowLoginModal] = useState(false);
-  const [loginMode, setLoginMode] = useState("user");
+  // Modal Học viên (Mã số đại lý) & Admin Modal
+  const [showStudentModal, setShowStudentModal] = useState(false);
+  const [showAdminLoginModal, setShowAdminLoginModal] = useState(false);
+  const [studentNameInput, setStudentNameInput] = useState("");
+  const [agentCodeInput, setAgentCodeInput] = useState("");
   const [pendingExam, setPendingExam] = useState(null);
-  const [usernameInput, setUsernameInput] = useState("");
-  const [passwordInput, setPasswordInput] = useState("");
 
+  // Admin Login Inputs
+  const [adminUsernameInput, setAdminUsernameInput] = useState("");
+  const [adminPasswordInput, setAdminPasswordInput] = useState("");
+
+  // Admin Statistics State
+  const [adminResults, setAdminResults] = useState([]);
+  const [searchAgentFilter, setSearchAgentFilter] = useState("");
+  const [isFetchingStats, setIsFetchingStats] = useState(false);
+  const [statsPage, setStatsPage] = useState(1);
+  const [statsPageSize, setStatsPageSize] = useState(10);
+  const [statsPeriod, setStatsPeriod] = useState("month");
+  const STATS_PAGE_SIZE_OPTIONS = [10, 50, 100];
   const [examBank, setExamBank] = useState({});
   const [isFetching, setIsFetching] = useState(true);
 
@@ -74,27 +88,6 @@ function App() {
 
   const [showQuestionGridModal, setShowQuestionGridModal] = useState(false);
   const answeredCount = Object.keys(answers).length;
-
-  useEffect(() => {
-    const handleBeforeUnload = () => {};
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-    };
-  }, [currentUser]);
-
-  // 2. TỰ ĐỘNG BẢO VỆ MÀN HÌNH LÀM BÀI/KẾT QUẢ/KHO CÂU SAI
-  // Chỉ tự động điều hướng nếu người dùng CHƯA ĐĂNG NHẬP mà cố tình vào các màn hình bảo vệ
-  useEffect(() => {
-    if (
-      (screen === "exam" ||
-        screen === "result" ||
-        screen === "wrong-bank-view") &&
-      !currentUser
-    ) {
-      resetHome(true);
-    }
-  }, [screen, currentUser]);
 
   useEffect(() => {
     loadWrongBank();
@@ -137,7 +130,7 @@ function App() {
     };
 
     setIsWrongPracticeMode(true);
-    startExam(customExam, currentUser);
+    startExam(customExam);
   }
 
   function clearWrongQuestionsBank() {
@@ -239,175 +232,125 @@ function App() {
     }
   }
 
-  async function verifyUserSession() {
-    if (!currentUser) {
-      notify("Vui lòng đăng nhập để tiếp tục!", "error");
-      processLogout();
-      return false;
+  // XỬ LÝ LƯU/CẬP NHẬT HỌC VIÊN QUA MÃ SỐ ĐẠI LÝ
+  async function handleSaveStudentInfo() {
+    if (!studentNameInput.trim() || !agentCodeInput.trim()) {
+      return notify("Vui lòng nhập đầy đủ Họ tên và Mã số Đại lý!", "error");
     }
 
+    const cleanCode = agentCodeInput.trim().toUpperCase();
+    const cleanName = studentNameInput.trim();
+
     try {
-      const { data, error } = await supabase
-        .from("users")
-        .select("session_id")
-        .eq("username", currentUser.username)
-        .single();
+      // Upsert vào bảng students trên Supabase
+      const { error } = await supabase.from("students").upsert(
+        [
+          {
+            agent_code: cleanCode,
+            name: cleanName,
+          },
+        ],
+        { onConflict: "agent_code" },
+      );
 
-      if (error || !data) return true;
+      if (error) throw error;
 
-      if (data.session_id && data.session_id !== currentUser.sessionId) {
-        notify(
-          "Tài khoản của bạn đã được đăng nhập từ một thiết bị khác!",
-          "error",
-        );
-        processLogout();
-        return false;
+      const studentObj = {
+        name: cleanName,
+        agentCode: cleanCode,
+      };
+
+      setCurrentStudent(studentObj);
+      localStorage.setItem("MANULIFE_STUDENT", JSON.stringify(studentObj));
+      setShowStudentModal(false);
+      notify(`Xin chào Đại lý ${cleanName} (${cleanCode})!`);
+
+      if (pendingExam) {
+        const examToStart = pendingExam;
+        setPendingExam(null);
+        startExam(examToStart);
       }
-      return true;
     } catch (err) {
-      return true;
+      notify("Lỗi lưu thông tin học viên: " + err.message, "error");
     }
   }
 
-  async function handleLogin() {
-    if (!usernameInput || !passwordInput)
-      return notify("Vui lòng nhập tài khoản và mật khẩu!", "error");
+  // XỬ LÝ ĐĂNG NHẬP ADMIN
+  async function handleAdminLogin() {
+    if (!adminUsernameInput || !adminPasswordInput)
+      return notify("Vui lòng nhập đầy đủ tài khoản và mật khẩu!", "error");
 
     try {
       const { data, error } = await supabase
         .from("users")
         .select("*")
-        .eq("username", usernameInput.trim())
-        .eq("password", passwordInput.trim())
+        .eq("username", adminUsernameInput.trim())
+        .eq("password", adminPasswordInput.trim())
+        .eq("role", "admin")
         .single();
 
       if (error || !data) {
-        return notify("Tài khoản hoặc mật khẩu không chính xác!", "error");
+        return notify("Tài khoản Quản trị không chính xác!", "error");
       }
 
-      const SESSION_TIMEOUT = 10 * 60 * 1000;
-
-      if (data.session_id) {
-        const parts = data.session_id.split("_");
-        const lastActiveTime = Number(parts[1]);
-        const now = Date.now();
-
-        if (lastActiveTime && now - lastActiveTime < SESSION_TIMEOUT) {
-          return notify(
-            "Tài khoản này đang được đăng nhập ở nơi khác! Vui lòng chờ thiết bị đó đăng xuất hoặc hết phiên.",
-            "error",
-          );
-        }
-      }
-
-      const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-
-      const { error: updateError } = await supabase
-        .from("users")
-        .update({ session_id: newSessionId })
-        .eq("username", data.username);
-
-      if (updateError) {
-        return notify(
-          "Không thể lưu phiên đăng nhập: " + updateError.message,
-          "error",
-        );
-      }
-
-      if (loginMode === "admin") {
-        setIsAdmin(true);
-        localStorage.setItem("MANULIFE_ADMIN", "true");
-        notify("Đăng nhập Admin thành công!");
-      } else {
-        notify("Đăng nhập thành công!");
-      }
-
-      const userObj = {
-        username: data.username,
-        name: data.name || data.username,
-        role: data.role || (loginMode === "admin" ? "admin" : "user"),
-        sessionId: newSessionId,
-      };
-
-      setCurrentUser(userObj);
-      localStorage.setItem("MANULIFE_USER", JSON.stringify(userObj));
-
-      setShowLoginModal(false);
-      setUsernameInput("");
-      setPasswordInput("");
-
-      if (pendingExam) {
-        const examToStart = pendingExam;
-        setPendingExam(null);
-        startExam(examToStart, userObj);
-      }
+      setIsAdmin(true);
+      localStorage.setItem("MANULIFE_ADMIN", "true");
+      setShowAdminLoginModal(false);
+      setAdminUsernameInput("");
+      setAdminPasswordInput("");
+      notify("Đăng nhập quyền Admin thành công!");
     } catch (err) {
-      notify("Lỗi xác thực: " + err.message, "error");
+      notify("Lỗi xác thực Admin: " + err.message, "error");
     }
   }
 
-  async function refreshSessionTimestamp() {
-    if (!currentUser) return;
-
-    const newSessionId = `session_${Date.now()}_${currentUser.sessionId.split("_")[2] || "active"}`;
-
-    await supabase
-      .from("users")
-      .update({ session_id: newSessionId })
-      .eq("username", currentUser.username);
-
-    const updatedUser = { ...currentUser, sessionId: newSessionId };
-    setCurrentUser(updatedUser);
-    localStorage.setItem("MANULIFE_USER", JSON.stringify(updatedUser));
-  }
-
-  useEffect(() => {
-    if (screen !== "exam" || !currentUser) return;
-
-    const interval = setInterval(
-      () => {
-        refreshSessionTimestamp();
-      },
-      2 * 60 * 1000,
-    );
-
-    return () => clearInterval(interval);
-  }, [screen, currentUser]);
-
-  // HÀM XỬ LÝ ĐĂNG XUẤT CÓ BẢO VỆ KHI ĐANG LÀM BÀI
-  function handleLogout() {
-    if (screen === "exam") {
-      setConfirmModal({
-        title: "Xác nhận đăng xuất?",
-        message:
-          "Bạn đang trong quá trình làm bài thi. Đăng xuất lúc này sẽ hủy bỏ kết quả bài làm hiện tại!",
-        confirmText: "Đăng xuất & Hủy bài",
-        danger: true,
-        onConfirm: async () => {
-          await processLogout();
-        },
-      });
-      return;
-    }
-
-    processLogout();
-  }
-
-  async function processLogout() {
-    if (currentUser) {
-      await supabase
-        .from("users")
-        .update({ session_id: null })
-        .eq("username", currentUser.username);
-    }
-
+  function handleAdminLogout() {
     setIsAdmin(false);
-    setCurrentUser(null);
     localStorage.removeItem("MANULIFE_ADMIN");
-    localStorage.removeItem("MANULIFE_USER");
+    setScreen("home");
+    notify("Đã đăng xuất quyền Admin!");
+  }
 
-    resetHome(true);
-    notify("Đã đăng xuất tài khoản!");
+  function handleChangeStudentInfo() {
+    if (currentStudent) {
+      setStudentNameInput(currentStudent.name);
+      setAgentCodeInput(currentStudent.agentCode);
+    }
+    setShowStudentModal(true);
+  }
+
+  // TẢI BÁO CÁO THỐNG KÊ CHO ADMIN
+  async function fetchAdminStats() {
+    setIsFetchingStats(true);
+
+    try {
+      const batchSize = 1000;
+      const allResults = [];
+      let from = 0;
+
+      while (true) {
+        const { data, error } = await supabase
+          .from("exam_results")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .range(from, from + batchSize - 1);
+
+        if (error) throw error;
+
+        const batch = data || [];
+        allResults.push(...batch);
+
+        if (batch.length < batchSize) break;
+        from += batchSize;
+      }
+
+      setAdminResults(allResults);
+      setScreen("admin-stats");
+    } catch (err) {
+      notify("Lỗi lấy dữ liệu thống kê: " + err.message, "error");
+    } finally {
+      setIsFetchingStats(false);
+    }
   }
 
   async function handleSaveImport() {
@@ -567,22 +510,17 @@ function App() {
     return arr;
   }
 
-  async function handleExamClick(exam) {
-    if (!currentUser) {
-      notify("Bạn cần đăng nhập tài khoản trước khi vào thi!", "error");
+  function handleExamClick(exam) {
+    if (!currentStudent) {
       setPendingExam(exam);
-      setLoginMode("user");
-      setShowLoginModal(true);
+      setShowStudentModal(true);
       return;
     }
 
-    const isValid = await verifyUserSession();
-    if (!isValid) return;
-
-    startExam(exam, currentUser);
+    startExam(exam);
   }
 
-  function startExam(exam, user) {
+  function startExam(exam) {
     if (!exam.questions || !exam.questions.length)
       return notify("Đề thi này chưa có câu hỏi!", "error");
 
@@ -602,21 +540,15 @@ function App() {
     }));
   }
 
-  async function handleNavigateQuestion(step) {
-    const isValid = await verifyUserSession();
-    if (!isValid) return;
-
+  function handleNavigateQuestion(step) {
     setCurrent((c) => Math.min(Math.max(0, c + step), questions.length - 1));
   }
 
-  async function finishExam(auto = false) {
+  function finishExam(auto = false) {
     if (auto) {
       executeSubmit();
       return;
     }
-
-    const isValid = await verifyUserSession();
-    if (!isValid) return;
 
     const answeredCount = Object.keys(answers).length;
     const unAnsweredCount = questions.length - answeredCount;
@@ -634,23 +566,46 @@ function App() {
     });
   }
 
-  function executeSubmit() {
+  async function executeSubmit() {
     const score = questions.reduce((sum, q, idx) => {
       return sum + (answers[idx] === q.answer ? 1 : 0);
     }, 0);
 
+    const timeUsed = (selectedExam.duration || 60) * 60 - secondsLeft;
+    const isPassed = score / questions.length >= 0.7;
+
     saveWrongQuestions(questions, answers, selectedExam, subjectInfo);
+
+    // Ghi kết quả bài thi lên Supabase cho Admin Thống kê
+    if (currentStudent) {
+      try {
+        await supabase.from("exam_results").insert([
+          {
+            agent_code: currentStudent.agentCode,
+            student_name: currentStudent.name,
+            exam_id: selectedExam.id,
+            exam_name: selectedExam.name,
+            subject_id: subjectInfo?.id || selectedExam.subject,
+            score: score,
+            total: questions.length,
+            time_used: timeUsed,
+            passed: isPassed,
+          },
+        ]);
+      } catch (err) {
+        console.error("Lỗi ghi kết quả thi:", err);
+      }
+    }
 
     setResult({
       score,
       total: questions.length,
       auto: false,
-      timeUsed: (selectedExam.duration || 60) * 60 - secondsLeft,
+      timeUsed,
     });
     setScreen("result");
   }
 
-  // HÀM VỀ TRANG CHỦ CÓ HỎI XÁC NHẬN NẾU ĐANG THI
   function resetHome(force = false) {
     if (screen === "exam" && !force) {
       setConfirmModal({
@@ -682,6 +637,124 @@ function App() {
   const currentQuestion = questions[current];
   const subjectInfo = subjectList.find((x) => x.id === subject);
   const currentExamList = examBank[subject] || [];
+
+  const periodAdminResults = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+
+    if (statsPeriod === "last3months") {
+      start.setMonth(start.getMonth() - 2);
+    } else if (statsPeriod === "year") {
+      start.setMonth(0);
+    } else if (statsPeriod === "all") {
+      return adminResults;
+    }
+
+    return adminResults.filter((row) => {
+      if (!row.created_at) return false;
+      const createdAt = new Date(row.created_at);
+      return !Number.isNaN(createdAt.getTime()) && createdAt >= start;
+    });
+  }, [adminResults, statsPeriod]);
+
+  const filteredAdminResults = useMemo(() => {
+    const term = searchAgentFilter.trim().toLowerCase();
+
+    return periodAdminResults.filter((row) =>
+      [row.agent_code, row.student_name, row.exam_name]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(term)),
+    );
+  }, [periodAdminResults, searchAgentFilter]);
+
+  const statsPageCount = Math.max(
+    1,
+    Math.ceil(filteredAdminResults.length / statsPageSize),
+  );
+
+  const paginatedAdminResults = filteredAdminResults.slice(
+    (statsPage - 1) * statsPageSize,
+    statsPage * statsPageSize,
+  );
+
+  const subjectStats = useMemo(() => {
+    const counts = new Map();
+
+    periodAdminResults.forEach((row) => {
+      const subjectId = row.subject_id || "other";
+      const subjectName =
+        subjectList.find((item) => item.id === subjectId)?.name || subjectId;
+
+      counts.set(subjectName, (counts.get(subjectName) || 0) + 1);
+    });
+
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+  }, [periodAdminResults, subjectList]);
+
+  const passedCount = periodAdminResults.filter((row) => row.passed).length;
+  const passRate = periodAdminResults.length
+    ? Math.round((passedCount / periodAdminResults.length) * 100)
+    : 0;
+
+  const weeklyStats = useMemo(() => {
+    const days = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date();
+      date.setHours(0, 0, 0, 0);
+      date.setDate(date.getDate() - (6 - index));
+
+      const key = [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, "0"),
+        String(date.getDate()).padStart(2, "0"),
+      ].join("-");
+
+      const weekdays = [
+        "Chủ nhật",
+        "Thứ 2",
+        "Thứ 3",
+        "Thứ 4",
+        "Thứ 5",
+        "Thứ 6",
+        "Thứ 7",
+      ];
+
+      return {
+        key,
+        dateLabel: `${String(date.getDate()).padStart(2, "0")}/${String(
+          date.getMonth() + 1,
+        ).padStart(2, "0")}`,
+        weekdayLabel: weekdays[date.getDay()],
+        isToday: index === 6,
+        count: 0,
+      };
+    });
+
+    const dayCounts = new Map(days.map((day) => [day.key, day]));
+
+    periodAdminResults.forEach((row) => {
+      if (!row.created_at) return;
+
+      const date = new Date(row.created_at);
+      if (Number.isNaN(date.getTime())) return;
+
+      const key = [
+        date.getFullYear(),
+        String(date.getMonth() + 1).padStart(2, "0"),
+        String(date.getDate()).padStart(2, "0"),
+      ].join("-");
+
+      const day = dayCounts.get(key);
+      if (day) day.count += 1;
+    });
+
+    return days;
+  }, [periodAdminResults]);
+
+  useEffect(() => {
+    setStatsPage(1);
+  }, [searchAgentFilter, adminResults, statsPeriod]);
 
   function saveWrongQuestions(examQuestions, userAnswers, examObj, subInfo) {
     try {
@@ -741,7 +814,8 @@ function App() {
           </div>
         </div>
         <div className="topbar-actions">
-          {currentUser ? (
+          {/* HIỂN THỊ THÔNG TIN HỌC VIÊN HOẶC ĐĂNG NHẬP */}
+          {currentStudent ? (
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span
                 className="admin-badge"
@@ -749,44 +823,51 @@ function App() {
                   background: "#e8f5e9",
                   color: "#2e7d32",
                   borderColor: "#c8e6c9",
+                  cursor: "pointer",
                 }}
+                onClick={handleChangeStudentInfo}
+                title="Bấm để đổi tên/mã đại lý"
               >
-                👤 {currentUser.name || currentUser.username}{" "}
-                {isAdmin ? "(Admin)" : ""}
+                👤 {currentStudent.name} ({currentStudent.agentCode})
               </span>
-              {isAdmin && (
-                <button
-                  className="import-btn"
-                  onClick={() => setShowImportModal(true)}
-                >
-                  <span>➕</span> Import Đề
-                </button>
-              )}
-              <button className="ghost-btn" onClick={handleLogout}>
-                Đăng xuất
+            </div>
+          ) : (
+            <button
+              className="primary-btn"
+              onClick={() => {
+                setStudentNameInput("");
+                setAgentCodeInput("");
+                setShowStudentModal(true);
+              }}
+            >
+              📝 Nhập Mã Đại Lý
+            </button>
+          )}
+
+          {/* QUYỀN ADMIN */}
+          {isAdmin ? (
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <button className="secondary-btn" onClick={fetchAdminStats}>
+                📊 Thống Kê
+              </button>
+              <button
+                className="import-btn"
+                onClick={() => setShowImportModal(true)}
+              >
+                ➕ Import Đề
+              </button>
+              <button className="ghost-btn" onClick={handleAdminLogout}>
+                Thoát Admin
               </button>
             </div>
           ) : (
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                className="primary-btn"
-                onClick={() => {
-                  setLoginMode("user");
-                  setShowLoginModal(true);
-                }}
-              >
-                🔑 Đăng nhập
-              </button>
-              <button
-                className="secondary-btn"
-                onClick={() => {
-                  setLoginMode("admin");
-                  setShowLoginModal(true);
-                }}
-              >
-                🔒 Admin
-              </button>
-            </div>
+            <button
+              className="ghost-btn"
+              style={{ fontSize: "11px", padding: "6px 10px" }}
+              onClick={() => setShowAdminLoginModal(true)}
+            >
+              🔒 Admin
+            </button>
           )}
 
           {screen !== "home" && (
@@ -827,8 +908,8 @@ function App() {
               </div>
             </section>
 
-            {/* THẺ NGÂN HÀNG CÂU HỎI SAI - CHỈ HIỂN THỊ KHIN ĐÃ ĐĂNG NHẬP VÀ CÓ CÂU SAI */}
-            {currentUser && wrongQuestionsBank.length > 0 && (
+            {/* THẺ NGÂN HÀNG CÂU HỎI SAI */}
+            {wrongQuestionsBank.length > 0 && (
               <div
                 style={{
                   background: "#fff3e0",
@@ -952,9 +1033,9 @@ function App() {
                   {subjectInfo?.icon} {subjectInfo?.name}
                 </h1>
                 <p>
-                  {currentUser
-                    ? "Chọn một đề thi để bắt đầu luyện tập trực tiếp."
-                    : "⚠️ Vui lòng đăng nhập để bắt đầu làm bài thi."}
+                  {currentStudent
+                    ? `Đại lý: ${currentStudent.name} (${currentStudent.agentCode}) - Chọn đề thi để bắt đầu làm bài.`
+                    : "⚠️ Hãy nhập tên & Mã đại lý để hệ thống ghi nhận kết quả."}
                 </p>
               </div>
               <button
@@ -1011,6 +1092,342 @@ function App() {
               )}
             </div>
           </>
+        )}
+
+        {/* MÀN HÌNH ADMIN THỐNG KÊ KẾT QUẢ THI CỦA HỌC VIÊN */}
+        {screen === "admin-stats" && (
+          <div>
+            <div className="stats-page-heading">
+              <div>
+                <span className="eyebrow">ADMIN BÁO CÁO</span>
+                <h1>Thống Kê Kết Quả Học Viên</h1>
+                <p>Theo dõi kết quả làm bài theo kỳ thống kê đã chọn.</p>
+              </div>
+
+              <div className="stats-heading-actions">
+                <label className="stats-period-select">
+                  <span>Kỳ thống kê</span>
+                  <select
+                    value={statsPeriod}
+                    onChange={(e) => setStatsPeriod(e.target.value)}
+                  >
+                    <option value="month">Tháng này</option>
+                    <option value="last3months">3 tháng gần nhất</option>
+                    <option value="year">Năm nay</option>
+                    <option value="all">Toàn bộ thời gian</option>
+                  </select>
+                </label>
+
+                <button
+                  className="secondary-btn"
+                  onClick={() => setScreen("home")}
+                >
+                  ← Trang chủ
+                </button>
+              </div>
+            </div>
+
+            {!isFetchingStats && periodAdminResults.length > 0 && (
+              <section className="stats-dashboard">
+                <article className="stats-chart-card stats-overview-card">
+                  <div>
+                    <span className="stats-chart-kicker">TỔNG QUAN</span>
+                    <h2>Kết quả học viên</h2>
+                    <p>Tổng lượt làm bài đã được ghi nhận</p>
+                  </div>
+                  <strong className="stats-total">
+                    {periodAdminResults.length}
+                  </strong>
+                  <div className="stats-overview-footer">
+                    <span>{passedCount} lượt đạt</span>
+                    <span>
+                      {periodAdminResults.length - passedCount} lượt chưa đạt
+                    </span>
+                  </div>
+                </article>
+
+                <article className="stats-chart-card">
+                  <span className="stats-chart-kicker">TỶ LỆ ĐẠT</span>
+                  <h2>Kết quả chung</h2>
+                  <div
+                    className="stats-donut"
+                    style={{
+                      background: `conic-gradient(#00a758 ${passRate}%, #edf2f0 ${passRate}% 100%)`,
+                    }}
+                    role="img"
+                    aria-label={`Tỷ lệ đạt ${passRate}%`}
+                  >
+                    <div>
+                      <strong>{passRate}%</strong>
+                      <span>đạt</span>
+                    </div>
+                  </div>
+                  <p className="stats-chart-caption">
+                    {passedCount} trên {periodAdminResults.length} lượt làm bài
+                    đạt yêu cầu
+                  </p>
+                </article>
+
+                <article className="stats-chart-card stats-subject-card">
+                  <span className="stats-chart-kicker">PHÂN BỐ</span>
+                  <h2>Lượt làm theo môn</h2>
+                  <div className="stats-bars">
+                    {subjectStats.map((item) => (
+                      <div className="stats-bar-row" key={item.name}>
+                        <div className="stats-bar-label">
+                          <span>{item.name}</span>
+                          <strong>{item.count}</strong>
+                        </div>
+                        <div className="stats-bar-track">
+                          <div
+                            className="stats-bar-fill"
+                            style={{
+                              width: `${Math.max(
+                                6,
+                                (item.count /
+                                  Math.max(
+                                    ...subjectStats.map((stat) => stat.count),
+                                  )) *
+                                  100,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="stats-chart-card stats-weekly-card">
+                  <h2>Hoạt động làm bài</h2>
+                  <p>Số lượt nộp bài theo từng ngày trong 7 ngày gần nhất</p>
+                  <svg
+                    className="stats-line-chart"
+                    viewBox="0 0 600 190"
+                    role="img"
+                    aria-label="Số lượt làm bài trong 7 ngày gần nhất"
+                  >
+                    <line x1="24" y1="150" x2="576" y2="150" />
+                    <line x1="24" y1="100" x2="576" y2="100" />
+                    <line x1="24" y1="50" x2="576" y2="50" />
+                    <polyline
+                      points={weeklyStats
+                        .map((day, index) => {
+                          const max = Math.max(
+                            1,
+                            ...weeklyStats.map((item) => item.count),
+                          );
+                          const x = 30 + index * 90;
+                          const y = 145 - (day.count / max) * 110;
+                          return `${x},${y}`;
+                        })
+                        .join(" ")}
+                    />
+                    {weeklyStats.map((day, index) => {
+                      const max = Math.max(
+                        1,
+                        ...weeklyStats.map((item) => item.count),
+                      );
+                      const x = 30 + index * 90;
+                      const y = 145 - (day.count / max) * 110;
+
+                      return (
+                        <circle
+                          key={day.key}
+                          cx={x}
+                          cy={y}
+                          r="5"
+                          aria-label={`${day.weekdayLabel}, ngày ${day.dateLabel}: ${day.count} lượt làm bài`}
+                        />
+                      );
+                    })}
+                  </svg>
+                  <div className="stats-chart-axis">
+                    {weeklyStats.map((day) => (
+                      <span
+                        key={day.key}
+                        className={day.isToday ? "is-today" : ""}
+                      >
+                        <span className="stats-axis-date">{day.dateLabel}</span>
+                        <span className="stats-axis-weekday">
+                          {day.weekdayLabel}
+                          {day.isToday ? " · Hôm nay" : ""}
+                        </span>
+                        <strong>{day.count} lượt</strong>
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              </section>
+            )}
+            {/* Bộ lọc chỉ áp dụng cho bảng kết quả bên dưới */}
+            <div style={{ marginBottom: "20px", display: "flex", gap: "10px" }}>
+              <input
+                type="text"
+                placeholder="🔍 Tìm mã đại lý, tên học viên hoặc đề thi..."
+                value={searchAgentFilter}
+                onChange={(e) => setSearchAgentFilter(e.target.value)}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "10px",
+                  border: "1px solid #ccc",
+                  width: "100%",
+                  maxWidth: "400px",
+                }}
+              />
+            </div>
+            {isFetchingStats ? (
+              <p>Đang tải dữ liệu thống kê...</p>
+            ) : periodAdminResults.length === 0 ? (
+              <p>Không có dữ liệu trong kỳ thống kê này.</p>
+            ) : filteredAdminResults.length === 0 ? (
+              <p>Không tìm thấy kết quả phù hợp với từ khóa.</p>
+            ) : (
+              <div className="stats-table-wrap">
+                <table
+                  className="stats-table"
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: "14px",
+                    textAlign: "left",
+                  }}
+                >
+                  <thead>
+                    <tr
+                      style={{
+                        background: "#f0f7f4",
+                        borderBottom: "1px solid #e1ebe7",
+                      }}
+                    >
+                      <th style={{ padding: "12px" }}>STT</th>
+                      <th style={{ padding: "12px" }}>Mã Đại Lý</th>
+                      <th style={{ padding: "12px" }}>Họ Và Tên</th>
+                      <th style={{ padding: "12px" }}>Đề Thi</th>
+                      <th style={{ padding: "12px" }}>Điểm Số</th>
+                      <th style={{ padding: "12px" }}>Tỷ Lệ</th>
+                      <th style={{ padding: "12px" }}>Thời Gian</th>
+                      <th style={{ padding: "12px" }}>Trạng Thái</th>
+                      <th style={{ padding: "12px" }}>Ngày Làm</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedAdminResults.map((row, pageIndex) => {
+                      const rowNumber =
+                        (statsPage - 1) * statsPageSize + pageIndex + 1;
+                      const pct = row.total
+                        ? Math.round((row.score / row.total) * 100)
+                        : 0;
+                      const mins = Math.floor((row.time_used || 0) / 60);
+                      const secs = (row.time_used || 0) % 60;
+
+                      return (
+                        <tr
+                          key={row.id || rowNumber}
+                          style={{ borderBottom: "1px solid #f0f0f0" }}
+                        >
+                          <td style={{ padding: "12px" }}>{rowNumber}</td>
+                          <td style={{ padding: "12px", fontWeight: "bold" }}>
+                            {row.agent_code}
+                          </td>
+                          <td style={{ padding: "12px" }}>
+                            {row.student_name}
+                          </td>
+                          <td style={{ padding: "12px" }}>{row.exam_name}</td>
+                          <td style={{ padding: "12px", fontWeight: "bold" }}>
+                            {row.score} / {row.total}
+                          </td>
+                          <td style={{ padding: "12px" }}>{pct}%</td>
+                          <td style={{ padding: "12px" }}>
+                            {mins}m {secs}s
+                          </td>
+                          <td style={{ padding: "12px" }}>
+                            <span
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: "6px",
+                                fontSize: "12px",
+                                fontWeight: "bold",
+                                background: row.passed ? "#e8f5e9" : "#ffebee",
+                                color: row.passed ? "#2e7d32" : "#c62828",
+                              }}
+                            >
+                              {row.passed ? "✓ ĐẠT" : "✗ CHƯA ĐẠT"}
+                            </span>
+                          </td>
+                          <td
+                            style={{
+                              padding: "12px",
+                              fontSize: "12px",
+                              color: "#777",
+                            }}
+                          >
+                            {row.created_at
+                              ? new Date(row.created_at).toLocaleString("vi-VN")
+                              : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {!isFetchingStats && filteredAdminResults.length > 0 && (
+              <div className="stats-pagination">
+                <label className="stats-page-size">
+                  Số dòng mỗi trang
+                  <select
+                    value={statsPageSize}
+                    onChange={(e) => {
+                      setStatsPageSize(Number(e.target.value));
+                      setStatsPage(1);
+                    }}
+                  >
+                    {STATS_PAGE_SIZE_OPTIONS.map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <span>
+                  {filteredAdminResults.length === 0
+                    ? "Không tìm thấy kết quả phù hợp"
+                    : `${(statsPage - 1) * statsPageSize + 1}–${Math.min(
+                        statsPage * statsPageSize,
+                        filteredAdminResults.length,
+                      )} / ${filteredAdminResults.length} kết quả`}
+                </span>
+
+                <div>
+                  <button
+                    className="secondary-btn"
+                    disabled={statsPage === 1}
+                    onClick={() =>
+                      setStatsPage((page) => Math.max(1, page - 1))
+                    }
+                  >
+                    ← Trước
+                  </button>
+                  <span className="stats-page-number">
+                    {statsPage} / {statsPageCount}
+                  </span>
+                  <button
+                    className="secondary-btn"
+                    disabled={statsPage >= statsPageCount}
+                    onClick={() =>
+                      setStatsPage((page) => Math.min(statsPageCount, page + 1))
+                    }
+                  >
+                    Sau →
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {screen === "edit-exam" && editingExam && (
@@ -1145,7 +1562,8 @@ function App() {
                 <span className="eyebrow">{subjectInfo?.name}</span>
                 <h1>{selectedExam?.name}</h1>
                 <small style={{ color: "#666" }}>
-                  Thí sinh: <b>{currentUser?.name || currentUser?.username}</b>
+                  Thí sinh: <b>{currentStudent?.name}</b> (Mã ĐL:{" "}
+                  <b>{currentStudent?.agentCode}</b>)
                 </small>
               </div>
               <div className={`timer ${secondsLeft < 300 ? "danger" : ""}`}>
@@ -1262,80 +1680,104 @@ function App() {
           </div>
         )}
 
-        {screen === "result" && result && (
-          <div className="result-container">
-            <div className="result-card-main">
-              <div style={{ fontSize: "36px" }}>
-                {result.score / result.total >= 0.75 ? "🎉" : "📚"}
-              </div>
-              <span className="eyebrow">KẾT QUẢ BÀI THI CỦA BẠN</span>
+        {/* UI KẾT QUẢ BÀI THI */}
+        {screen === "result" &&
+          result &&
+          (() => {
+            const PASS_PERCENTAGE = 0.7; // Chuẩn đầu ra >= 70%
+            const percentage = Math.round((result.score / result.total) * 100);
+            const isPassed = percentage >= PASS_PERCENTAGE * 100;
+            const passQuestionsCount = Math.ceil(
+              result.total * PASS_PERCENTAGE,
+            );
 
-              <div className="score-circle">
-                <strong>{result.score}</strong>
-                <span>/ {result.total} CÂU</span>
-              </div>
+            const minutes = Math.floor(result.timeUsed / 60);
+            const seconds = result.timeUsed % 60;
+            const timeFormatted = `${minutes}m ${seconds}s`;
 
-              <h3 style={{ margin: "8px 0 4px" }}>
-                {result.score / result.total >= 0.75
-                  ? "Chúc mừng! Bạn đã ĐẠT bài thi."
-                  : "Cần cố gắng thêm ở lần sau!"}
-              </h3>
-              <p style={{ color: "#666", fontSize: "13px" }}>
-                Thí sinh: <b>{currentUser?.name || currentUser?.username}</b> •
-                Tỷ lệ trả lời chính xác:{" "}
-                <b>{Math.round((result.score / result.total) * 100)}%</b>
-              </p>
+            return (
+              <div className="result-container">
+                <div className="result-card-sample">
+                  <div className="result-mascot">{isPassed ? "🎉" : "💪"}</div>
 
-              <div className="result-stats-row">
-                <div className="stat-box">
-                  <strong style={{ color: "#00a758" }}>{result.score}</strong>
-                  <span>Câu đúng</span>
+                  <div
+                    className={`status-badge ${isPassed ? "passed" : "failed"}`}
+                  >
+                    {isPassed
+                      ? `ĐẠT (CẦN ≥ ${PASS_PERCENTAGE * 100}%)`
+                      : `CHƯA ĐẠT (CẦN ≥ ${PASS_PERCENTAGE * 100}%)`}
+                  </div>
+
+                  <h1 className="result-title">
+                    {isPassed
+                      ? "Chúc Mừng Bạn Đã Hoàn Thành!"
+                      : "Hãy Cố Gắng Luyện Thêm!"}
+                  </h1>
+                  <p className="result-subtext">
+                    Đại lý: <b>{currentStudent?.name}</b> (
+                    {currentStudent?.agentCode}) • Đạt{" "}
+                    <b>
+                      {result.score}/{result.total} câu ({percentage}%)
+                    </b>
+                    .{" "}
+                    {isPassed
+                      ? "Bạn đã xuất sắc vượt qua bài kiểm tra!"
+                      : "Hãy ôn lại các câu đã làm sai để đạt kết quả tốt nhất nhé!"}
+                  </p>
+
+                  <div className="result-stats-grid">
+                    <div className="stat-card">
+                      <span className="stat-label">Điểm số</span>
+                      <strong className="stat-value">
+                        {result.score} / {result.total}
+                      </strong>
+                    </div>
+
+                    <div className="stat-card">
+                      <span className="stat-label">Tỷ lệ chính xác</span>
+                      <strong className="stat-value">{percentage}%</strong>
+                    </div>
+
+                    <div className="stat-card">
+                      <span className="stat-label">Thời gian làm bài</span>
+                      <strong className="stat-value">{timeFormatted}</strong>
+                    </div>
+
+                    <div className="stat-card">
+                      <span className="stat-label">Chuẩn đầu ra</span>
+                      <strong className="stat-value pass-criteria">
+                        ≥ {passQuestionsCount}/{result.total} (
+                        {PASS_PERCENTAGE * 100}%)
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="result-actions-row">
+                    <button
+                      className="action-btn retry-btn"
+                      onClick={() => startExam(selectedExam)}
+                    >
+                      🔄 Làm Lại Đề Này
+                    </button>
+
+                    <button
+                      className="action-btn review-btn"
+                      onClick={() => setScreen("review")}
+                    >
+                      📋 Xem Chi Tiết Đáp Án
+                    </button>
+
+                    <button
+                      className="action-btn home-btn"
+                      onClick={() => resetHome(false)}
+                    >
+                      🏠 Về Trang Chủ
+                    </button>
+                  </div>
                 </div>
-                <div className="stat-box">
-                  <strong style={{ color: "#e53935" }}>
-                    {result.total - result.score}
-                  </strong>
-                  <span>Câu sai</span>
-                </div>
-                <div className="stat-box">
-                  <strong>
-                    {Math.floor(result.timeUsed / 60)}' {result.timeUsed % 60}s
-                  </strong>
-                  <span>Thời gian</span>
-                </div>
               </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "center",
-                  gap: "10px",
-                  flexWrap: "wrap",
-                }}
-              >
-                <button
-                  className="primary-btn"
-                  style={{ background: "#0288d1" }}
-                  onClick={() => setScreen("review")}
-                >
-                  🔍 Xem lại bài làm
-                </button>
-                <button
-                  className="secondary-btn"
-                  onClick={() => startExam(selectedExam, currentUser)}
-                >
-                  ↻ Làm lại đề này
-                </button>
-                <button
-                  className="secondary-btn"
-                  onClick={() => setScreen("exams")}
-                >
-                  Chọn đề khác →
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+            );
+          })()}
 
         {screen === "review" && (
           <div className="review-container">
@@ -1489,16 +1931,40 @@ function App() {
                               {String.fromCharCode(65 + oIdx)}
                             </span>
                             <span style={{ flex: 1 }}>{opt}</span>
+
+                            {/* HIỂN THỊ ĐÁP ÁN NGƯỜI DÙNG CHỌN SAI */}
                             {isUserSelected && !isAnswerRight && (
                               <span
-                                style={{ color: "#d32f2f", fontWeight: "bold" }}
+                                style={{
+                                  color: "#d32f2f",
+                                  fontWeight: "bold",
+                                  background: "#ffcdd2",
+                                  padding: "2px 8px",
+                                  borderRadius: "6px",
+                                  fontSize: "12px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                }}
                               >
-                                ✗ Bạn chọn
+                                ✖ Câu bạn đã chọn (Sai)
                               </span>
                             )}
+
+                            {/* HIỂN THỊ ĐÁP ÁN ĐÚNG */}
                             {isAnswerRight && (
                               <span
-                                style={{ color: "#2e7d32", fontWeight: "bold" }}
+                                style={{
+                                  color: "#2e7d32",
+                                  fontWeight: "bold",
+                                  background: "#c8e6c9",
+                                  padding: "2px 8px",
+                                  borderRadius: "6px",
+                                  fontSize: "12px",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                }}
                               >
                                 ✓ Đáp án đúng
                               </span>
@@ -1507,6 +1973,23 @@ function App() {
                         );
                       })}
                     </div>
+
+                    {userChoice === undefined && (
+                      <div
+                        style={{
+                          marginTop: "10px",
+                          color: "#d32f2f",
+                          fontSize: "13px",
+                          fontWeight: "bold",
+                          background: "#ffebee",
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          border: "1px dashed #d32f2f",
+                        }}
+                      >
+                        ⚠️ Bạn đã bỏ trống câu hỏi này (Chưa chọn đáp án nào).
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1677,7 +2160,7 @@ function App() {
           </div>
         )}
 
-        {/* MODAL POPUP DANH SÁCH CÂU HỎI (1 - N) */}
+        {/* MODAL POPUP DANH SÁCH CÂU HỎI */}
         {showQuestionGridModal && (
           <div
             className="modal-overlay"
@@ -1794,12 +2277,9 @@ function App() {
                     return (
                       <button
                         key={idx}
-                        onClick={async () => {
-                          const isValid = await verifyUserSession();
-                          if (isValid) {
-                            setCurrent(idx);
-                            setShowQuestionGridModal(false);
-                          }
+                        onClick={() => {
+                          setCurrent(idx);
+                          setShowQuestionGridModal(false);
                         }}
                         style={{
                           height: "42px",
@@ -1837,20 +2317,16 @@ function App() {
         )}
       </main>
 
-      {/* Modal Đăng Nhập */}
-      {showLoginModal && (
+      {/* MODAL NHẬP THÔNG TIN HỌC VIÊN / MÃ SỐ ĐẠI LÝ */}
+      {showStudentModal && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: "400px" }}>
+          <div className="modal-content" style={{ maxWidth: "420px" }}>
             <div className="modal-header">
-              <h2>
-                {loginMode === "admin"
-                  ? "🔒 Đăng Nhập Quản Trị"
-                  : "🔑 Đăng Nhập Tài Khoản"}
-              </h2>
+              <h2>📝 Thông Tin Học Viên</h2>
               <button
                 className="close-btn"
                 onClick={() => {
-                  setShowLoginModal(false);
+                  setShowStudentModal(false);
                   setPendingExam(null);
                 }}
               >
@@ -1860,7 +2336,7 @@ function App() {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                handleLogin();
+                handleSaveStudentInfo();
               }}
             >
               <div className="modal-body">
@@ -1874,26 +2350,28 @@ function App() {
                       borderRadius: "8px",
                     }}
                   >
-                    📌 Bạn cần đăng nhập để bắt đầu làm bài thi "
+                    📌 Vui lòng nhập thông tin để ghi nhận bài thi "
                     <b>{pendingExam.name}</b>"
                   </div>
                 )}
                 <div className="form-group">
-                  <label>Tên đăng nhập:</label>
+                  <label>Mã Số Đại Lý (Duy nhất):</label>
                   <input
                     type="text"
-                    value={usernameInput}
-                    onChange={(e) => setUsernameInput(e.target.value)}
-                    placeholder="Nhập tên tài khoản..."
+                    value={agentCodeInput}
+                    onChange={(e) => setAgentCodeInput(e.target.value)}
+                    placeholder="Ví dụ: DL123456"
+                    required
                   />
                 </div>
                 <div className="form-group">
-                  <label>Mật khẩu:</label>
+                  <label>Họ Và Tên Học Viên:</label>
                   <input
-                    type="password"
-                    value={passwordInput}
-                    onChange={(e) => setPasswordInput(e.target.value)}
-                    placeholder="Nhập mật khẩu..."
+                    type="text"
+                    value={studentNameInput}
+                    onChange={(e) => setStudentNameInput(e.target.value)}
+                    placeholder="Ví dụ: Nguyễn Văn A"
+                    required
                   />
                 </div>
               </div>
@@ -1902,14 +2380,70 @@ function App() {
                   type="button"
                   className="secondary-btn"
                   onClick={() => {
-                    setShowLoginModal(false);
+                    setShowStudentModal(false);
                     setPendingExam(null);
                   }}
                 >
                   Hủy
                 </button>
                 <button type="submit" className="primary-btn">
-                  Đăng nhập
+                  Lưu & Làm Bài
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ĐĂNG NHẬP ADMIN */}
+      {showAdminLoginModal && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: "400px" }}>
+            <div className="modal-header">
+              <h2>🔒 Đăng Nhập Quản Trị</h2>
+              <button
+                className="close-btn"
+                onClick={() => setShowAdminLoginModal(false)}
+              >
+                ✕
+              </button>
+            </div>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleAdminLogin();
+              }}
+            >
+              <div className="modal-body">
+                <div className="form-group">
+                  <label>Tài khoản Admin:</label>
+                  <input
+                    type="text"
+                    value={adminUsernameInput}
+                    onChange={(e) => setAdminUsernameInput(e.target.value)}
+                    placeholder="Tên tài khoản..."
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Mật khẩu Admin:</label>
+                  <input
+                    type="password"
+                    value={adminPasswordInput}
+                    onChange={(e) => setAdminPasswordInput(e.target.value)}
+                    placeholder="Mật khẩu..."
+                  />
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => setShowAdminLoginModal(false)}
+                >
+                  Hủy
+                </button>
+                <button type="submit" className="primary-btn">
+                  Xác thực Admin
                 </button>
               </div>
             </form>
@@ -2124,7 +2658,7 @@ function App() {
         </div>
       )}
 
-      {/* MODAL XÁC NHẬN CHUNG (DÙNG CHO XÓA, NỘP BÀI, RỜI BÀI, ĐĂNG XUẤT) */}
+      {/* MODAL XÁC NHẬN CHUNG */}
       {confirmModal && (
         <div className="modal-overlay">
           <div className="confirm-modal-content">
