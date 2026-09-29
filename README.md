@@ -105,9 +105,13 @@ created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()) NOT NUL
 
 ### 3. Cấu hình Supabase trong ứng dụng
 
-Mở file src/supabase.js và cập nhật thông tin URL và ANON_KEY của bạn:
-const SUPABASE_URL = "[https://your-supabase-url.supabase.co](https://your-supabase-url.supabase.co)";
+Mở file `src/supabase.js` và cập nhật thông tin URL và ANON_KEY của bạn:
+
+```javascript
+const SUPABASE_URL =
+  "[https://your-supabase-url.supabase.co](https://your-supabase-url.supabase.co)";
 const SUPABASE_ANON_KEY = "your-supabase-anon-key";
+```
 
 ### 4. Khởi chạy ứng dụng
 
