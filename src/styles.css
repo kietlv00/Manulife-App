@@ -1573,3 +1573,80 @@ html,
   color: #008a49;
   font-weight: 800;
 }
+/* Hiệu ứng hover cho dòng bảng thống kê */
+.stats-table tr.clickable-row:hover {
+  background-color: #f0fdf6 !important;
+  transition: background-color 0.15s ease;
+}
+/* --- CSS Bổ Súng Cho Header & HomeView --- */
+
+.student-badge {
+  background: #e8f5e9 !important;
+  color: #2e7d32 !important;
+  border-color: #c8e6c9 !important;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.header-wrong-btn {
+  border-color: #e65100 !important;
+  color: #e65100 !important;
+}
+
+.wrong-bank-card {
+  background: #fff3e0;
+  border: 1px solid #ffe0b2;
+  border-radius: 16px;
+  padding: 20px 24px;
+  margin: 10px 0 32px 0; /* Giữ khoảng cách Spacing chuẩn rộng rãi */
+}
+
+.wrong-bank-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.wrong-bank-title {
+  margin: 4px 0 2px;
+  color: #e65100;
+  font-size: 20px;
+}
+
+.wrong-bank-desc {
+  margin: 0;
+  font-size: 13.5px;
+  color: #666;
+}
+
+.wrong-bank-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.eyebrow-orange {
+  color: #e65100 !important;
+}
+
+.btn-orange-primary {
+  background: #e65100 !important;
+}
+
+.btn-orange-secondary {
+  border-color: #e65100 !important;
+  color: #e65100 !important;
+}
+
+.subject-arrow-icon {
+  color: #00a758;
+  font-weight: bold;
+}
+
+.section-header {
+  margin-top: 10px;
+  margin-bottom: 20px;
+}

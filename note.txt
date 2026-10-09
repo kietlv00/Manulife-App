@@ -1,0 +1,15 @@
+src/
+├── components/
+│   ├── Header.jsx                 # Thanh Navigation Topbar
+│   ├── Footer.jsx                 # Chân trang Footer
+│   ├── Modals.jsx                 # Tất cả các Popup (Student, Admin Login, Import, Subject, Confirm, QuestionGrid)
+│   ├── AdminStats.jsx             # Màn hình Admin Thống kê Báo cáo
+│   ├── AdminWrongQuestions.jsx    # Màn hình Admin Quản lý Ngân hàng câu sai DB
+│   ├── ExamView.jsx               # Màn hình Học viên Đang làm bài thi
+│   ├── ExamResult.jsx             # Màn hình Kết quả làm bài
+│   ├── ExamReview.jsx             # Màn hình Xem lại chi tiết đáp án
+│   └── WrongBankView.jsx          # Màn hình Học viên Ôn lại kho câu sai
+├── parser.js                      # Đọc & parse file docx/pdf
+├── supabase.js                    # Kết nối Supabase Client
+├── styles.css                     # CSS tổng
+└── main.jsx                       # Entry Point rút gọn quản lý State tổng
