@@ -10,7 +10,7 @@ export function ExamResult({
 }) {
   if (!result) return null;
 
-  const PASS_PERCENTAGE = 0.7;
+  const PASS_PERCENTAGE = 0.75;
   const percentage = Math.round((result.score / result.total) * 100);
   const isPassed = percentage >= PASS_PERCENTAGE * 100;
   const passQuestionsCount = Math.ceil(result.total * PASS_PERCENTAGE);
